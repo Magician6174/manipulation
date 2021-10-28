@@ -71,6 +71,113 @@ def StartMeshcat(open_window=False):
 
 # Some GUI code that will be moved into Drake.
 
+class MeshcatSliderSystem(LeafSystem):
+    """
+    A system that outputs the ``value``s from meshcat sliders.
+
+    .. pydrake_system::
+
+      name: MeshcatSliderSystem
+      output_ports:
+      - slider_group_0
+      - ...
+      - slider_group_{N-1}
+    """
+
+    def __init__(self, meshcat, slider_names):
+        """
+        An output port is created for each element in `slider_names`.  Each
+        element of `slider_names` must itself be an iterable collection (list,
+        tuple, set, ...) of strings, with the names of sliders that have *already* been added to Meshcat via Meshcat.AddSlider().
+        """
+        LeafSystem.__init__(self)
+
+        self._sliders = slider_names
+        for i, slider_iterable in enumerate(self._sliders):
+            port = self.DeclareVectorOutputPort(
+                f"slider_group_{i}",
+                len(slider_iterable),
+                partial(self.DoCalcOutput, port_index=i))
+            port.disable_caching_by_default()
+
+        port = self.DeclareVectorOutputPort(
+            "pose", lambda: AbstractValue.Make(RigidTransform()),
+            self.DoCalcOutput)
+
+        # The widgets themselves have undeclared state.  For now, we accept it,
+        # and simply disable caching on the output port.
+        # TODO(russt): consider implementing the more elaborate methods seen
+        # in, e.g., LcmMessageSubscriber.
+        port.disable_caching_by_default()
+
+        self._meshcat = meshcat
+        self._visible = visible
+        self._value = list(value)
+
+        for i in range(6):
+            if visible[i]:
+                meshcat.AddSlider(min=min_range[i],
+                                  max=max_range[i],
+                                  value=value[i],
+                                  step=0.01,
+                                  name=value._fields[i])
+
+    def __del__(self):
+        for s in ['roll', 'pitch', 'yaw', 'x', 'y', 'z']:
+            if visible[s]:
+                self._meshcat.DeleteSlider(s)
+
+    def SetPose(self, pose):
+        """
+        Sets the current value of the sliders.
+
+        Args:
+            pose: Any viable argument for the RigidTransform
+                  constructor.
+        """
+        tf = RigidTransform(pose)
+        self.SetRpy(RollPitchYaw(tf.rotation()))
+        self.SetXyz(tf.translation())
+
+    def SetRpy(self, rpy):
+        """
+        Sets the current value of the sliders for roll, pitch, and yaw.
+
+        Args:
+            rpy: An instance of drake.math.RollPitchYaw
+        """
+        self._value[0] = rpy.roll_angle()
+        self._value[1] = rpy.pitch_angle()
+        self._value[2] = rpy.yaw_angle()
+        for i in range(3):
+            if self._visible[i]:
+                self._meshcat.SetSliderValue(self._visible._fields[i],
+                                             self._value[i])
+
+    def SetXyz(self, xyz):
+        """
+        Sets the current value of the sliders for x, y, and z.
+
+        Args:
+            xyz: A 3 element iterable object with x, y, z.
+        """
+        self._value[3:] = xyz
+        for i in range(3, 6):
+            if self._visible[i]:
+                self._meshcat.SetSliderValue(self._visible._fields[i],
+                                             self._value[i])
+
+    def DoCalcOutput(self, context, output):
+        """Constructs the output values from the widget elements."""
+        for i in range(6):
+            if self._visible[i]:
+                self._value[i] = self._meshcat.GetSliderValue(
+                    self._visible._fields[i])
+        output.set_value(
+            RigidTransform(
+                RollPitchYaw(self._value[0], self._value[1], self._value[2]),
+                self._value[3:]))
+
 
 class MeshcatPoseSliders(LeafSystem):
     """
